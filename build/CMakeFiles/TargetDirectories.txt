@@ -1,3 +1,0 @@
-/home/fraggi/Programmi/Progetti/SaveHarbor/build/CMakeFiles/saveharbor.dir
-/home/fraggi/Programmi/Progetti/SaveHarbor/build/CMakeFiles/edit_cache.dir
-/home/fraggi/Programmi/Progetti/SaveHarbor/build/CMakeFiles/rebuild_cache.dir
