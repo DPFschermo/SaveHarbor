@@ -8,4 +8,5 @@ include_directories(include)
 add_executable(saveharbor
     src/main.cpp
     src/xbox360/stfs_parser.cpp
+    src/xbox360/xtaf_parser.cpp
 )
