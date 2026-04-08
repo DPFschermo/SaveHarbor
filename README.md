@@ -16,7 +16,6 @@ cd SaveHarbor
 mkdir -p build && cd build
 sudo cmake ..
 make
-``
 ```
 ```
 ```
@@ -28,8 +27,7 @@ Using SaveHarbor is pretty simple:
 ```bash
 cd build
 ./saveharbor /path/to/xboxhdd (Ex. /dev/sda)
-```
-```
+``
 ```
 
 # WARNING
