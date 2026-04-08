@@ -1,3 +1,5 @@
 # SaveHarbor Xbox360 data extractor
 
-![Logo](assets/Logo.png)
+<p align="center">
+  <img src="assets/logo.png" alt="Save Harbor Logo" width="400">
+</p>
