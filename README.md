@@ -9,26 +9,20 @@ SaveHarbor is a tool written in c++, it aims to the detection of save game files
 # Installing
 
 You can install SaveHarbor by first cloning the repo:
-```
-```bash
+~~~bash
 git clone https://github.com/DPFschermo/SaveHarbor.git
-cd SaveHarbor
-mkdir -p build && cd build
-sudo cmake ..
+cd Saveharbor
+mkdir build && cd build
+sudo cmake
 make
-```
-```
-```
+~~~
 
 # Usage
-
 Using SaveHarbor is pretty simple:
-```
-```bash
+~~~bash
 cd build
 ./saveharbor /path/to/xboxhdd (Ex. /dev/sda)
-``
-```
+~~~
 
 # WARNING
 Again, I repeat, SaveHarbor is still in early development, so the scan might take a while and not all games are detected, i'm still unsure if the extracted files are playable, if you encounter bugs please contact me
