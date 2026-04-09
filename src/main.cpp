@@ -2,12 +2,15 @@
 #include <iomanip>
 #include <string>
 #include <vector>
-#include <limits>
 #include "stfs_scanner.h"
 
-// default output directory
-const std::string OUTPUT_DIR =
-    std::string(getenv("HOME")) + "/SaveHarbor_Saves";
+void printBanner() {
+    std::cout << "=================================" << std::endl;
+    std::cout << "  SaveHarbor v0.4 - Xbox 360"     << std::endl;
+    std::cout << "  Save File Extractor"             << std::endl;
+    std::cout << "=================================" << std::endl;
+    std::cout << std::endl;
+}
 
 void printTable(const std::vector<STFSSave>& saves) {
     std::cout << std::endl;
@@ -23,7 +26,6 @@ void printTable(const std::vector<STFSSave>& saves) {
 
     for (size_t i = 0; i < saves.size(); i++) {
         const auto& s = saves[i];
-        // truncate long strings for display
         std::string name = s.titleName.length() > 30
             ? s.titleName.substr(0, 30) : s.titleName;
         std::string tag  = s.gamertag.length()   > 12
@@ -42,16 +44,46 @@ void printTable(const std::vector<STFSSave>& saves) {
     std::cout << std::string(72, '=') << std::endl;
 }
 
+// ask user if they want raw or xenia extraction
+// returns true = xenia, false = raw
+bool askExtractionMode() {
+    std::cout << "\nHow would you like to extract?" << std::endl;
+    std::cout << "  1 - Raw file (use with any emulator or backup)" << std::endl;
+    std::cout << "  2 - Direct to Xenia content folder"             << std::endl;
+    std::cout << "\nYour choice (1/2): ";
+
+    std::string choice;
+    std::cin >> choice;
+    return (choice == "2");
+}
+
+void doExtract(const std::string& drivePath,
+               const STFSSave& save,
+               bool xeniaMode) {
+    if (xeniaMode) {
+        std::string xeniaDir = getXeniaContentDir();
+        std::cout << "\nXenia content dir: " << xeniaDir << std::endl;
+        extractSaveForXenia(drivePath, save, xeniaDir);
+    } else {
+        std::string outputDir = getDefaultOutputDir();
+        extractSave(drivePath, save, outputDir);
+    }
+}
+
 int main(int argc, char* argv[]) {
-    std::cout << "=================================" << std::endl;
-    std::cout << "  SaveHarbor v0.3 - Xbox 360"     << std::endl;
-    std::cout << "  Save File Extractor"             << std::endl;
-    std::cout << "=================================" << std::endl;
-    std::cout << std::endl;
+    printBanner();
 
     if (argc < 2) {
-        std::cout << "Usage: sudo ./saveharbor <drive>" << std::endl;
-        std::cout << "Example: sudo ./saveharbor /dev/sda" << std::endl;
+        std::cout << "Usage:" << std::endl;
+#ifdef _WIN32
+        std::cout << "  Run as Administrator!" << std::endl;
+        std::cout << "  saveharbor.exe \\\\.\\PhysicalDrive1" << std::endl;
+        std::cout << "  (use PhysicalDrive0, 1, 2... for your drive)" << std::endl;
+#else
+        std::cout << "  sudo ./saveharbor /dev/sda" << std::endl;
+        std::cout << "  sudo ./saveharbor /dev/sdb  (if sda is your main disk)"
+                  << std::endl;
+#endif
         return 1;
     }
 
@@ -59,7 +91,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Scanning: " << drivePath << std::endl;
     std::cout << "This may take a few minutes..." << std::endl << std::endl;
 
-    // scan the drive
     std::vector<STFSSave> saves = scanDriveForSaves(drivePath);
 
     if (saves.empty()) {
@@ -68,18 +99,28 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "\nFound " << saves.size() << " save files!" << std::endl;
-
-    // print results table
     printTable(saves);
 
-    std::cout << "\nSaves will go to: " << OUTPUT_DIR << std::endl;
-    std::cout << "\nOptions:" << std::endl;
-    std::cout << "  Enter a number to extract that save" << std::endl;
-    std::cout << "  Enter 'all' to extract everything"   << std::endl;
-    std::cout << "  Enter 'q' to quit"                   << std::endl;
+    // ask extraction mode once upfront
+    bool xeniaMode = askExtractionMode();
+
+    if (xeniaMode) {
+        std::cout << "\nSaves will go to: " << getXeniaContentDir() << std::endl;
+    } else {
+        std::cout << "\nSaves will go to: " << getDefaultOutputDir() << std::endl;
+    }
+
+    std::cout << "\nOptions:"                                    << std::endl;
+    std::cout << "  Enter a number to extract that save"        << std::endl;
+    std::cout << "  Enter 'all' to extract everything"          << std::endl;
+    std::cout << "  Enter 'm' to switch extraction mode"        << std::endl;
+    std::cout << "  Enter 'q' to quit"                          << std::endl;
 
     while (true) {
-        std::cout << "\nYour choice: ";
+        std::cout << "\n[Mode: "
+                  << (xeniaMode ? "Xenia" : "Raw file")
+                  << "] Your choice: ";
+
         std::string choice;
         std::cin >> choice;
 
@@ -87,31 +128,41 @@ int main(int argc, char* argv[]) {
             std::cout << "Goodbye!" << std::endl;
             break;
 
+        } else if (choice == "m" || choice == "M") {
+            xeniaMode = !xeniaMode;
+            std::cout << "Switched to: "
+                      << (xeniaMode ? "Xenia mode" : "Raw file mode")
+                      << std::endl;
+
         } else if (choice == "all" || choice == "ALL") {
-            std::cout << "\nExtracting all " << saves.size() << " saves..." << std::endl;
+            std::cout << "\nExtracting all " << saves.size()
+                      << " saves..." << std::endl;
             int success = 0;
             for (const auto& save : saves) {
-                if (extractSave(drivePath, save, OUTPUT_DIR)) success++;
+                if (xeniaMode) {
+                    if (extractSaveForXenia(drivePath, save,
+                                            getXeniaContentDir())) success++;
+                } else {
+                    if (extractSave(drivePath, save,
+                                    getDefaultOutputDir())) success++;
+                }
             }
-            std::cout << "\nDone! " << success << "/" << saves.size()
-                      << " saves extracted to " << OUTPUT_DIR << std::endl;
+            std::cout << "\nDone! " << success << "/"
+                      << saves.size() << " saves extracted." << std::endl;
             break;
 
         } else {
-            // try to parse as number
             try {
                 int idx = std::stoi(choice) - 1;
                 if (idx >= 0 && idx < (int)saves.size()) {
-                    extractSave(drivePath, saves[idx], OUTPUT_DIR);
-                    std::cout << "\nTo use with Xenia:" << std::endl;
-                    std::cout << "  Copy the .stfs file to ~/.config/Xenia/content/"
-                              << std::endl;
+                    doExtract(drivePath, saves[idx], xeniaMode);
                 } else {
                     std::cout << "Enter a number between 1 and "
                               << saves.size() << std::endl;
                 }
             } catch (...) {
-                std::cout << "Invalid input. Enter a number, 'all', or 'q'" << std::endl;
+                std::cout << "Invalid input. Enter a number, "
+                             "'all', 'm', or 'q'" << std::endl;
             }
         }
     }

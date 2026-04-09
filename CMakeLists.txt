@@ -5,9 +5,18 @@ set(CMAKE_CXX_STANDARD 17)
 
 include_directories(include)
 
-add_executable(saveharbor
+set(SOURCES
     src/main.cpp
     src/xbox360/stfs_scanner.cpp
     src/xbox360/stfs_parser.cpp
     src/xbox360/xtaf_parser.cpp
 )
+
+add_executable(saveharbor ${SOURCES})
+
+if(WIN32)
+    set_property(TARGET saveharbor PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set_target_properties(saveharbor PROPERTIES
+        WIN32_EXECUTABLE FALSE)
+endif()
