@@ -1,17 +1,17 @@
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <winioctl.h>
+#endif
+
 #include "stfs_scanner.h"
 #include <iostream>
 #include <fstream>
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
-#include <sstream>
-
-// Windows needs special handling for raw physical drives
-#ifdef _WIN32
-#define NOMINMAX
-#include <windows.h>
-#include <winioctl.h>
-#endif
+#include <vector>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -55,50 +55,34 @@ std::string getXeniaContentDir() {
 
 static uint64_t getDriveSize(const std::string& drivePath) {
 #ifdef _WIN32
-    // on Windows, seekg/tellg doesn't work on physical drives
-    // we must use DeviceIoControl instead
     HANDLE hDrive = CreateFileA(
         drivePath.c_str(),
         GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
-        NULL,
-        OPEN_EXISTING,
-        0,
-        NULL
+        NULL, OPEN_EXISTING, 0, NULL
     );
-
     if (hDrive == INVALID_HANDLE_VALUE) {
-        std::cerr << "Error: cannot open drive (error code: "
+        std::cerr << "Error: cannot open drive (code: "
                   << GetLastError() << ")" << std::endl;
         std::cerr << "Make sure you run as Administrator!" << std::endl;
         return 0;
     }
-
-    GET_LENGTH_INFORMATION lengthInfo;
-    DWORD bytesReturned = 0;
-    if (!DeviceIoControl(
-            hDrive,
-            IOCTL_DISK_GET_LENGTH_INFO,
-            NULL, 0,
-            &lengthInfo, sizeof(lengthInfo),
-            &bytesReturned,
-            NULL)) {
-        std::cerr << "Error: cannot get drive size (error code: "
+    GET_LENGTH_INFORMATION li = {};
+    DWORD br = 0;
+    if (!DeviceIoControl(hDrive, IOCTL_DISK_GET_LENGTH_INFO,
+                         NULL, 0, &li, sizeof(li), &br, NULL)) {
+        std::cerr << "Error: cannot get drive size (code: "
                   << GetLastError() << ")" << std::endl;
         CloseHandle(hDrive);
         return 0;
     }
-
     CloseHandle(hDrive);
-    return (uint64_t)lengthInfo.Length.QuadPart;
+    return (uint64_t)li.Length.QuadPart;
 #else
-    // on Linux seekg to end works fine
     std::ifstream f(drivePath, std::ios::binary);
     if (!f.is_open()) return 0;
     f.seekg(0, std::ios::end);
-    uint64_t size = f.tellg();
-    f.close();
-    return size;
+    return (uint64_t)f.tellg();
 #endif
 }
 
@@ -139,14 +123,22 @@ static std::string bytesToString(const uint8_t* buf, size_t maxBytes) {
 static bool isValidSTFS(const uint8_t* data, size_t size) {
     if (size < 0x500) return false;
 
+    // check magic
     bool validMagic = (memcmp(data, "CON ", 4) == 0) ||
                       (memcmp(data, "LIVE", 4) == 0) ||
                       (memcmp(data, "PIRS", 4) == 0);
     if (!validMagic) return false;
 
+    // title ID at 0x360 must be non-zero
     uint32_t titleId = readBE32(data, 0x360);
     if (titleId == 0) return false;
 
+    // platform byte at 0x364 must be 2 (Xbox 360)
+    // this is a single byte, not a uint32
+    uint8_t platform = data[0x364];
+    if (platform != 0x02) return false;
+
+    // content type at 0x344 must be a known value
     uint32_t contentType = readBE32(data, 0x344);
     static const uint32_t validTypes[] = {
         0x00000001, 0x00000002, 0x00000003, 0x00000004,
@@ -157,8 +149,10 @@ static bool isValidSTFS(const uint8_t* data, size_t size) {
         if (contentType == t) { validType = true; break; }
     if (!validType) return false;
 
-    uint32_t version = readBE32(data, 0x364);
-    if (version > 2) return false;
+    // title ID sanity — top byte should be non-zero for real games
+    // system IDs like FFFE07D1 are fine too
+    uint8_t topByte = (titleId >> 24) & 0xFF;
+    if (topByte == 0x00 && titleId > 0x0000FFFF) return false;
 
     return true;
 }
@@ -189,25 +183,19 @@ static STFSSave parseHeader(const uint8_t* data, uint64_t offset) {
 }
 
 // =====================================================================
-// CROSS-PLATFORM FILE READER
-// On Windows we use HANDLE directly for physical drives
-// On Linux we use ifstream
+// CROSS-PLATFORM DRIVE READER
 // =====================================================================
 
-#ifdef _WIN32
-
-// Windows drive reader using HANDLE
 class DriveReader {
 public:
+
+#ifdef _WIN32
     HANDLE hDrive = INVALID_HANDLE_VALUE;
 
     bool open(const std::string& path) {
-        hDrive = CreateFileA(
-            path.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL, OPEN_EXISTING, 0, NULL
-        );
+        hDrive = CreateFileA(path.c_str(),
+            GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL, OPEN_EXISTING, 0, NULL);
         return hDrive != INVALID_HANDLE_VALUE;
     }
 
@@ -218,11 +206,9 @@ public:
     }
 
     size_t read(uint8_t* buf, size_t size) {
-        // Windows requires reads on physical drives to be
-        // aligned to 512-byte sector boundaries
-        // round up size to nearest 512
+        // reads must be 512-byte sector aligned on Windows physical drives
         size_t aligned = ((size + 511) / 512) * 512;
-        std::vector<uint8_t> tmp(aligned);
+        std::vector<uint8_t> tmp(aligned, 0);
         DWORD bytesRead = 0;
         ReadFile(hDrive, tmp.data(), (DWORD)aligned, &bytesRead, NULL);
         size_t actual = (std::min)((size_t)bytesRead, size);
@@ -238,13 +224,8 @@ public:
     }
 
     bool isOpen() { return hDrive != INVALID_HANDLE_VALUE; }
-};
 
 #else
-
-// Linux drive reader using ifstream
-class DriveReader {
-public:
     std::ifstream f;
 
     bool open(const std::string& path) {
@@ -264,9 +245,8 @@ public:
 
     void close() { f.close(); }
     bool isOpen() { return f.is_open(); }
-};
-
 #endif
+};
 
 // =====================================================================
 // DRIVE SCANNER
@@ -275,7 +255,6 @@ public:
 std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
     std::vector<STFSSave> saves;
 
-    // get drive size first
     uint64_t driveSize = getDriveSize(drivePath);
     if (driveSize == 0) {
         std::cerr << "Error: could not determine drive size." << std::endl;
@@ -296,11 +275,10 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
         return saves;
     }
 
-    const size_t CHUNK    = 1024 * 1024;
-    const size_t HDR_SIZE = 0x500;
-    uint64_t     offset   = 0;
+    const uint64_t STEP     = 0x1000;
+    const size_t   HDR_SIZE = 0x500;
+    uint64_t       offset   = 0;
 
-    std::vector<uint8_t> chunk(CHUNK + HDR_SIZE);
     std::vector<uint8_t> header(HDR_SIZE);
 
     const uint8_t* MAGICS[] = {
@@ -310,7 +288,8 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
     };
 
     while (offset < driveSize) {
-        double pct   = (double)offset / driveSize * 100.0;
+        // progress bar
+        double pct    = (double)offset / driveSize * 100.0;
         double gbDone = offset    / (1024.0*1024.0*1024.0);
         double gbTot  = driveSize / (1024.0*1024.0*1024.0);
         int    bars   = (int)(pct / 5);
@@ -324,39 +303,29 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
                   << "Found: " << saves.size()
                   << std::flush;
 
-        drive.seek(offset);
-        size_t bytesRead = drive.read(chunk.data(), CHUNK + HDR_SIZE);
-        if (bytesRead == 0) break;
+        // read header at this aligned offset
+        if (!drive.seek(offset)) { offset += STEP; continue; }
+        size_t bytesRead = drive.read(header.data(), HDR_SIZE);
+        if (bytesRead < 8) { offset += STEP; continue; }
 
+        // quick magic check before full validation
+        bool hasMagic = false;
         for (const uint8_t* magic : MAGICS) {
-            size_t pos = 0;
-            while (pos + 4 <= bytesRead) {
-                size_t found = std::string::npos;
-                for (size_t i = pos; i + 4 <= bytesRead; i++) {
-                    if (memcmp(chunk.data() + i, magic, 4) == 0) {
-                        found = i;
-                        break;
-                    }
-                }
-                if (found == std::string::npos) break;
-
-                uint64_t absOffset = offset + found;
-
-                drive.seek(absOffset);
-                drive.read(header.data(), HDR_SIZE);
-
-                if (isValidSTFS(header.data(), HDR_SIZE)) {
-                    bool duplicate = false;
-                    for (const auto& s : saves)
-                        if (s.offset == absOffset) { duplicate = true; break; }
-                    if (!duplicate)
-                        saves.push_back(parseHeader(header.data(), absOffset));
-                }
-                pos = found + 1;
+            if (memcmp(header.data(), magic, 4) == 0) {
+                hasMagic = true;
+                break;
             }
         }
 
-        offset += CHUNK;
+        if (hasMagic && isValidSTFS(header.data(), bytesRead)) {
+            bool duplicate = false;
+            for (const auto& s : saves)
+                if (s.offset == offset) { duplicate = true; break; }
+            if (!duplicate)
+                saves.push_back(parseHeader(header.data(), offset));
+        }
+
+        offset += STEP;
     }
 
     double gbTot = driveSize / (1024.0*1024.0*1024.0);
@@ -387,11 +356,10 @@ bool extractSave(const std::string& drivePath,
     snprintf(offsetBuf, sizeof(offsetBuf), "_%llx.stfs",
              (unsigned long long)save.offset);
 
-    std::string sep = 
 #ifdef _WIN32
-        "\\";
+    std::string sep = "\\";
 #else
-        "/";
+    std::string sep = "/";
 #endif
 
     std::string outputPath = outputDir + sep + safeName + offsetBuf;
@@ -409,7 +377,7 @@ bool extractSave(const std::string& drivePath,
 
     drive.seek(save.offset);
     const size_t EXTRACT_SIZE = 4 * 1024 * 1024;
-    std::vector<uint8_t> data(EXTRACT_SIZE);
+    std::vector<uint8_t> data(EXTRACT_SIZE, 0);
     size_t bytesRead = drive.read(data.data(), EXTRACT_SIZE);
     drive.close();
 
@@ -432,14 +400,14 @@ bool extractSave(const std::string& drivePath,
 bool extractSaveForXenia(const std::string& drivePath,
                          const STFSSave& save,
                          const std::string& xeniaContentDir) {
+
     char titleIdHex[16];
     snprintf(titleIdHex, sizeof(titleIdHex), "%08X", save.titleId);
 
-    std::string sep =
 #ifdef _WIN32
-        "\\";
+    std::string sep = "\\";
 #else
-        "/";
+    std::string sep = "/";
 #endif
 
     std::string profileDir = xeniaContentDir + sep +
@@ -452,9 +420,9 @@ bool extractSaveForXenia(const std::string& drivePath,
     std::string outputPath = profileDir + sep + titleIdHex;
 
     std::cout << "\nExtracting for Xenia: " << save.titleName << std::endl;
-    std::cout << "Title ID:   0x" << titleIdHex               << std::endl;
-    std::cout << "Gamertag:   " << save.gamertag               << std::endl;
-    std::cout << "To:         " << outputPath                  << std::endl;
+    std::cout << "Title ID:   0x"           << titleIdHex     << std::endl;
+    std::cout << "Gamertag:   "             << save.gamertag  << std::endl;
+    std::cout << "To:         "             << outputPath     << std::endl;
 
     DriveReader drive;
     if (!drive.open(drivePath)) {
@@ -464,7 +432,7 @@ bool extractSaveForXenia(const std::string& drivePath,
 
     drive.seek(save.offset);
     const size_t EXTRACT_SIZE = 4 * 1024 * 1024;
-    std::vector<uint8_t> data(EXTRACT_SIZE);
+    std::vector<uint8_t> data(EXTRACT_SIZE, 0);
     size_t bytesRead = drive.read(data.data(), EXTRACT_SIZE);
     drive.close();
 
