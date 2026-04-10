@@ -275,11 +275,15 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
         return saves;
     }
 
-    const uint64_t STEP     = 0x1000;
+    // read 1MB chunks at a time for speed
+    // but only check at 0x1000-aligned offsets within each chunk
+    const size_t   CHUNK    = 1024 * 1024;  // 1MB read at a time
+    const uint64_t STEP     = 0x1000;       // check every 4096 bytes
     const size_t   HDR_SIZE = 0x500;
     uint64_t       offset   = 0;
 
-    std::vector<uint8_t> header(HDR_SIZE);
+    // chunk is 1MB + HDR_SIZE so headers at chunk boundaries are safe
+    std::vector<uint8_t> chunk(CHUNK + HDR_SIZE, 0);
 
     const uint8_t* MAGICS[] = {
         (uint8_t*)"CON ",
@@ -303,29 +307,37 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
                   << "Found: " << saves.size()
                   << std::flush;
 
-        // read header at this aligned offset
-        if (!drive.seek(offset)) { offset += STEP; continue; }
-        size_t bytesRead = drive.read(header.data(), HDR_SIZE);
-        if (bytesRead < 8) { offset += STEP; continue; }
+        // one big sequential read
+        if (!drive.seek(offset)) { offset += CHUNK; continue; }
+        size_t bytesRead = drive.read(chunk.data(), CHUNK + HDR_SIZE);
+        if (bytesRead == 0) break;
 
-        // quick magic check before full validation
-        bool hasMagic = false;
-        for (const uint8_t* magic : MAGICS) {
-            if (memcmp(header.data(), magic, 4) == 0) {
-                hasMagic = true;
-                break;
+        // check only at 0x1000-aligned positions within this chunk
+        for (size_t pos = 0; pos + HDR_SIZE <= bytesRead; pos += STEP) {
+            const uint8_t* data = chunk.data() + pos;
+
+            // quick magic check first (cheap)
+            bool hasMagic = false;
+            for (const uint8_t* magic : MAGICS) {
+                if (memcmp(data, magic, 4) == 0) {
+                    hasMagic = true;
+                    break;
+                }
+            }
+            if (!hasMagic) continue;
+
+            // full validation (only runs when magic matches)
+            if (isValidSTFS(data, HDR_SIZE)) {
+                uint64_t absOffset = offset + pos;
+                bool duplicate = false;
+                for (const auto& s : saves)
+                    if (s.offset == absOffset) { duplicate = true; break; }
+                if (!duplicate)
+                    saves.push_back(parseHeader(data, absOffset));
             }
         }
 
-        if (hasMagic && isValidSTFS(header.data(), bytesRead)) {
-            bool duplicate = false;
-            for (const auto& s : saves)
-                if (s.offset == offset) { duplicate = true; break; }
-            if (!duplicate)
-                saves.push_back(parseHeader(header.data(), offset));
-        }
-
-        offset += STEP;
+        offset += CHUNK;
     }
 
     double gbTot = driveSize / (1024.0*1024.0*1024.0);
