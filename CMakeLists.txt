@@ -15,8 +15,9 @@ set(SOURCES
 add_executable(saveharbor ${SOURCES})
 
 if(WIN32)
+    # suppress MSVC security warnings (we handle safety ourselves)
+    target_compile_definitions(saveharbor PRIVATE _CRT_SECURE_NO_WARNINGS)
+    # static runtime so .exe works without MSVC redistributable
     set_property(TARGET saveharbor PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    set_target_properties(saveharbor PROPERTIES
-        WIN32_EXECUTABLE FALSE)
 endif()
