@@ -8,6 +8,7 @@
 
 // Windows needs special handling for raw physical drives
 #ifdef _WIN32
+#define NOMINMAX
 #include <windows.h>
 #include <winioctl.h>
 #endif
@@ -224,7 +225,7 @@ public:
         std::vector<uint8_t> tmp(aligned);
         DWORD bytesRead = 0;
         ReadFile(hDrive, tmp.data(), (DWORD)aligned, &bytesRead, NULL);
-        size_t actual = std::min((size_t)bytesRead, size);
+        size_t actual = (std::min)((size_t)bytesRead, size);
         memcpy(buf, tmp.data(), actual);
         return actual;
     }
