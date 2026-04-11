@@ -118,12 +118,14 @@ static std::string bytesToString(const uint8_t* buf, size_t maxBytes) {
 
 // =====================================================================
 // STFS VALIDATION
+// Based on actual header analysis of real saves from your drive.
+// We keep this lean — only checks that we KNOW are correct.
 // =====================================================================
 
 static bool isValidSTFS(const uint8_t* data, size_t size) {
     if (size < 0x500) return false;
 
-    // check magic
+    // check magic bytes
     bool validMagic = (memcmp(data, "CON ", 4) == 0) ||
                       (memcmp(data, "LIVE", 4) == 0) ||
                       (memcmp(data, "PIRS", 4) == 0);
@@ -133,26 +135,28 @@ static bool isValidSTFS(const uint8_t* data, size_t size) {
     uint32_t titleId = readBE32(data, 0x360);
     if (titleId == 0) return false;
 
-    // platform byte at 0x364 must be 2 (Xbox 360)
-    // this is a single byte, not a uint32
-    uint8_t platform = data[0x364];
-    if (platform != 0x02) return false;
-
-    // content type at 0x344 must be a known value
+    // content type at 0x344 must be a known Xbox 360 value
+    // confirmed from real save: 0x344 = 00 00 00 01 (saved game)
     uint32_t contentType = readBE32(data, 0x344);
     static const uint32_t validTypes[] = {
-        0x00000001, 0x00000002, 0x00000003, 0x00000004,
-        0x000D0000, 0x00090000, 0x00040000, 0x000B0000
+        0x00000001, // saved game
+        0x00000002, // marketplace content
+        0x00000003, // publisher content
+        0x00000004, // Xbox 360 title
+        0x000D0000, // installer
+        0x00090000, // game on demand
+        0x00040000, // gamer profile
+        0x000B0000, // xbox saved game
     };
     bool validType = false;
     for (uint32_t t : validTypes)
         if (contentType == t) { validType = true; break; }
     if (!validType) return false;
 
-    // title ID sanity — top byte should be non-zero for real games
-    // system IDs like FFFE07D1 are fine too
-    uint8_t topByte = (titleId >> 24) & 0xFF;
-    if (topByte == 0x00 && titleId > 0x0000FFFF) return false;
+    // the header size field at 0x340 must be reasonable
+    // real saves have values like 0x971a (from your AC1 dump)
+    uint32_t headerSize = readBE32(data, 0x340);
+    if (headerSize == 0 || headerSize > 0x100000) return false;
 
     return true;
 }
@@ -163,8 +167,8 @@ static bool isValidSTFS(const uint8_t* data, size_t size) {
 
 static STFSSave parseHeader(const uint8_t* data, uint64_t offset) {
     STFSSave save;
-    save.magic       = std::string((char*)data, 4);
-    save.titleId     = readBE32(data, 0x360);
+    save.magic   = std::string((char*)data, 4);
+    save.titleId = readBE32(data, 0x360);
 
     auto it = KNOWN_TITLES.find(save.titleId);
     if (it != KNOWN_TITLES.end()) {
@@ -206,7 +210,7 @@ public:
     }
 
     size_t read(uint8_t* buf, size_t size) {
-        // reads must be 512-byte sector aligned on Windows physical drives
+        // Windows physical drive reads must be 512-byte aligned
         size_t aligned = ((size + 511) / 512) * 512;
         std::vector<uint8_t> tmp(aligned, 0);
         DWORD bytesRead = 0;
@@ -250,6 +254,8 @@ public:
 
 // =====================================================================
 // DRIVE SCANNER
+// Reads large 1MB chunks sequentially (fast),
+// but only validates at 0x1000-aligned offsets (no false positives).
 // =====================================================================
 
 std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
@@ -275,14 +281,12 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
         return saves;
     }
 
-    // read 1MB chunks at a time for speed
-    // but only check at 0x1000-aligned offsets within each chunk
-    const size_t   CHUNK    = 1024 * 1024;  // 1MB read at a time
-    const uint64_t STEP     = 0x1000;       // check every 4096 bytes
+    const size_t   CHUNK    = 1024 * 1024; // 1MB sequential reads
+    const uint64_t STEP     = 0x1000;      // check every 4096 bytes
     const size_t   HDR_SIZE = 0x500;
     uint64_t       offset   = 0;
 
-    // chunk is 1MB + HDR_SIZE so headers at chunk boundaries are safe
+    // extra HDR_SIZE bytes so headers at chunk boundary are safe
     std::vector<uint8_t> chunk(CHUNK + HDR_SIZE, 0);
 
     const uint8_t* MAGICS[] = {
@@ -312,11 +316,14 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
         size_t bytesRead = drive.read(chunk.data(), CHUNK + HDR_SIZE);
         if (bytesRead == 0) break;
 
-        // check only at 0x1000-aligned positions within this chunk
-        for (size_t pos = 0; pos + HDR_SIZE <= bytesRead; pos += STEP) {
+        // walk through chunk at 0x1000 intervals
+        for (size_t pos = 0;
+             pos + HDR_SIZE <= bytesRead;
+             pos += STEP) {
+
             const uint8_t* data = chunk.data() + pos;
 
-            // quick magic check first (cheap)
+            // cheap magic check first
             bool hasMagic = false;
             for (const uint8_t* magic : MAGICS) {
                 if (memcmp(data, magic, 4) == 0) {
@@ -326,12 +333,15 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
             }
             if (!hasMagic) continue;
 
-            // full validation (only runs when magic matches)
+            // full validation
             if (isValidSTFS(data, HDR_SIZE)) {
                 uint64_t absOffset = offset + pos;
                 bool duplicate = false;
                 for (const auto& s : saves)
-                    if (s.offset == absOffset) { duplicate = true; break; }
+                    if (s.offset == absOffset) {
+                        duplicate = true;
+                        break;
+                    }
                 if (!duplicate)
                     saves.push_back(parseHeader(data, absOffset));
             }
@@ -428,7 +438,6 @@ bool extractSaveForXenia(const std::string& drivePath,
                              "00000001";
 
     fs::create_directories(profileDir);
-
     std::string outputPath = profileDir + sep + titleIdHex;
 
     std::cout << "\nExtracting for Xenia: " << save.titleName << std::endl;
