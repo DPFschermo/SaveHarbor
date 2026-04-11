@@ -27,7 +27,7 @@ cd build
 ## Installing necessary components(Windows)
 To install SaveHarbor on windows you need some other apps:
 - Cmake for windows [Here](https://cmake.org/download/)
-- Visual studio community [Here](https://visualstudio.microsoft.com/it/vs/community/), once you enter vs community find your version and click modify, then under the Workloads tab, find "Desktop development with C++", check that box and click modify at the bottom right to download the necessary components
+- Visual studio community [Here](https://visualstudio.microsoft.com/it/vs/community/), Then enter vs community installer one last time, find your version and click modify, then under the Workloads tab, find "Desktop development with C++", check that box and click modify at the bottom right to download the necessary components
 - Git for windows
 
 ## Installing SaveHarbor (Windows)
