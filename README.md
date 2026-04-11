@@ -53,7 +53,7 @@ once you're there simply run SaveHarbor:
 ~~~bash
 saveharbor.exe \\.\PhysicalDrive6 
 ~~~
-(you can find the number of the xbox drive with Windows Disk Management (right click Start → Disk Management) and look which disk number your Xbox drive is.)
+You can find the number of the xbox drive with Windows Disk Management (right click Start → Disk Management) and look which disk number your Xbox drive is.
 ## Status
 Xbox 360: In development
 Ps3: Planned
