@@ -89,7 +89,7 @@ int main(int argc, char* argv[]) {
 
     std::string drivePath = argv[1];
     std::cout << "Scanning: " << drivePath << std::endl;
-    std::cout << "This may take a few minutes..." << std::endl << std::endl;
+    std::cout << "This may take quite some time..." << std::endl << std::endl;
 
     std::vector<STFSSave> saves = scanDriveForSaves(drivePath);
 
