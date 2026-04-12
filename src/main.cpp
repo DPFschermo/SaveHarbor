@@ -3,16 +3,20 @@
 #include <string>
 #include <vector>
 #include "stfs_scanner.h"
+#include "xtaf_parser.h"
+
+// Xbox 360 data partition offset (confirmed from our analysis)
+const uint64_t XBOX360_PARTITION = 4496818176ULL;
 
 void printBanner() {
     std::cout << "=================================" << std::endl;
-    std::cout << "  SaveHarbor v0.4 - Xbox 360"     << std::endl;
-    std::cout << "  Save File Extractor"             << std::endl;
+    std::cout << "  SaveHarbor v0.5 - Xbox 360"     << std::endl;
+    std::cout << "  Save & Game Extractor"           << std::endl;
     std::cout << "=================================" << std::endl;
     std::cout << std::endl;
 }
 
-void printTable(const std::vector<STFSSave>& saves) {
+void printSaveTable(const std::vector<STFSSave>& saves) {
     std::cout << std::endl;
     std::cout << std::string(72, '=') << std::endl;
     std::cout << std::left
@@ -28,10 +32,10 @@ void printTable(const std::vector<STFSSave>& saves) {
         const auto& s = saves[i];
         std::string name = s.titleName.length() > 30
             ? s.titleName.substr(0, 30) : s.titleName;
-        std::string tag  = s.gamertag.length()   > 12
-            ? s.gamertag.substr(0, 12)   : s.gamertag;
-        std::string date = s.date.length()        > 10
-            ? s.date.substr(0, 10)        : s.date;
+        std::string tag  = s.gamertag.length() > 12
+            ? s.gamertag.substr(0, 12) : s.gamertag;
+        std::string date = s.date.length() > 10
+            ? s.date.substr(0, 10) : s.date;
 
         std::cout << std::left
                   << std::setw(5)  << (i + 1)
@@ -44,29 +48,56 @@ void printTable(const std::vector<STFSSave>& saves) {
     std::cout << std::string(72, '=') << std::endl;
 }
 
-// ask user if they want raw or xenia extraction
-// returns true = xenia, false = raw
-bool askExtractionMode() {
-    std::cout << "\nHow would you like to extract?" << std::endl;
-    std::cout << "  1 - Raw file (use with any emulator or backup)" << std::endl;
-    std::cout << "  2 - Direct to Xenia content folder"             << std::endl;
-    std::cout << "\nYour choice (1/2): ";
+void printGameTable(const std::vector<XTAFGame>& games) {
+    if (games.empty()) {
+        std::cout << "\nNo installed games found in filesystem." << std::endl;
+        std::cout << "Games may be stored in GOD format (will show in save scan)"
+                  << std::endl;
+        return;
+    }
 
+    std::cout << std::endl;
+    std::cout << std::string(60, '=') << std::endl;
+    std::cout << std::left
+              << std::setw(5)  << "#"
+              << std::setw(12) << "Title ID"
+              << std::setw(30) << "Path"
+              << std::setw(10) << "Size"
+              << std::endl;
+    std::cout << std::string(60, '=') << std::endl;
+
+    for (size_t i = 0; i < games.size(); i++) {
+        const auto& g = games[i];
+        std::string path = g.xexPath.length() > 28
+            ? "..." + g.xexPath.substr(g.xexPath.length()-25) : g.xexPath;
+
+        std::cout << std::left
+                  << std::setw(5)  << (i + 1)
+                  << std::setw(12) << g.titleId
+                  << std::setw(30) << path
+                  << std::setw(10) << (g.xexSize / (1024*1024))
+                  << " MB" << std::endl;
+    }
+    std::cout << std::string(60, '=') << std::endl;
+}
+
+bool askExtractionMode() {
+    std::cout << "\nExtraction mode:" << std::endl;
+    std::cout << "  1 - Raw file (backup, use with any emulator)" << std::endl;
+    std::cout << "  2 - Direct to Xenia content folder"           << std::endl;
+    std::cout << "\nChoice (1/2): ";
     std::string choice;
     std::cin >> choice;
     return (choice == "2");
 }
 
-void doExtract(const std::string& drivePath,
-               const STFSSave& save,
-               bool xeniaMode) {
+void doExtractSave(const std::string& drivePath,
+                   const STFSSave& save,
+                   bool xeniaMode) {
     if (xeniaMode) {
-        std::string xeniaDir = getXeniaContentDir();
-        std::cout << "\nXenia content dir: " << xeniaDir << std::endl;
-        extractSaveForXenia(drivePath, save, xeniaDir);
+        extractSaveForXenia(drivePath, save, getXeniaContentDir());
     } else {
-        std::string outputDir = getDefaultOutputDir();
-        extractSave(drivePath, save, outputDir);
+        extractSave(drivePath, save, getDefaultOutputDir());
     }
 }
 
@@ -78,48 +109,21 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
         std::cout << "  Run as Administrator!" << std::endl;
         std::cout << "  saveharbor.exe \\\\.\\PhysicalDrive1" << std::endl;
-        std::cout << "  (use PhysicalDrive0, 1, 2... for your drive)" << std::endl;
 #else
         std::cout << "  sudo ./saveharbor /dev/sda" << std::endl;
-        std::cout << "  sudo ./saveharbor /dev/sdb  (if sda is your main disk)"
-                  << std::endl;
 #endif
         return 1;
     }
 
     std::string drivePath = argv[1];
-    std::cout << "Scanning: " << drivePath << std::endl;
-    std::cout << "This may take quite some time..." << std::endl << std::endl;
 
-    std::vector<STFSSave> saves = scanDriveForSaves(drivePath);
-
-    if (saves.empty()) {
-        std::cout << "No valid save files found." << std::endl;
-        return 0;
-    }
-
-    std::cout << "\nFound " << saves.size() << " save files!" << std::endl;
-    printTable(saves);
-
-    // ask extraction mode once upfront
-    bool xeniaMode = askExtractionMode();
-
-    if (xeniaMode) {
-        std::cout << "\nSaves will go to: " << getXeniaContentDir() << std::endl;
-    } else {
-        std::cout << "\nSaves will go to: " << getDefaultOutputDir() << std::endl;
-    }
-
-    std::cout << "\nOptions:"                                    << std::endl;
-    std::cout << "  Enter a number to extract that save"        << std::endl;
-    std::cout << "  Enter 'all' to extract everything"          << std::endl;
-    std::cout << "  Enter 'm' to switch extraction mode"        << std::endl;
-    std::cout << "  Enter 'q' to quit"                          << std::endl;
-
+    // main menu
     while (true) {
-        std::cout << "\n[Mode: "
-                  << (xeniaMode ? "Xenia" : "Raw file")
-                  << "] Your choice: ";
+        std::cout << "\nWhat would you like to do?" << std::endl;
+        std::cout << "  1 - Scan for save files"          << std::endl;
+        std::cout << "  2 - Scan for installed games"     << std::endl;
+        std::cout << "  q - Quit"                         << std::endl;
+        std::cout << "\nChoice: ";
 
         std::string choice;
         std::cin >> choice;
@@ -128,41 +132,117 @@ int main(int argc, char* argv[]) {
             std::cout << "Goodbye!" << std::endl;
             break;
 
-        } else if (choice == "m" || choice == "M") {
-            xeniaMode = !xeniaMode;
-            std::cout << "Switched to: "
-                      << (xeniaMode ? "Xenia mode" : "Raw file mode")
+        // ── SAVE SCAN ──────────────────────────────────────────
+        } else if (choice == "1") {
+
+            std::cout << "\nScanning: " << drivePath << std::endl;
+            std::cout << "This may take a while on an HDD..."
+                      << std::endl << std::endl;
+
+            std::vector<STFSSave> saves = scanDriveForSaves(drivePath);
+
+            if (saves.empty()) {
+                std::cout << "No save files found." << std::endl;
+                continue;
+            }
+
+            std::cout << "\nFound " << saves.size()
+                      << " save files!" << std::endl;
+            printSaveTable(saves);
+
+            bool xeniaMode = askExtractionMode();
+            std::cout << "\nSaves will go to: "
+                      << (xeniaMode ? getXeniaContentDir()
+                                    : getDefaultOutputDir())
                       << std::endl;
 
-        } else if (choice == "all" || choice == "ALL") {
-            std::cout << "\nExtracting all " << saves.size()
-                      << " saves..." << std::endl;
-            int success = 0;
-            for (const auto& save : saves) {
-                if (xeniaMode) {
-                    if (extractSaveForXenia(drivePath, save,
-                                            getXeniaContentDir())) success++;
+            std::cout << "\nEnter number, 'all', 'm' (switch mode), or 'b' (back)"
+                      << std::endl;
+
+            while (true) {
+                std::cout << "\n[" << (xeniaMode ? "Xenia" : "Raw")
+                          << "] Choice: ";
+                std::string c;
+                std::cin >> c;
+
+                if (c == "b" || c == "B") break;
+                else if (c == "m" || c == "M") {
+                    xeniaMode = !xeniaMode;
+                    std::cout << "Switched to: "
+                              << (xeniaMode ? "Xenia" : "Raw")
+                              << std::endl;
+                } else if (c == "all" || c == "ALL") {
+                    int ok = 0;
+                    for (const auto& s : saves) {
+                        if (doExtractSave(drivePath, s, xeniaMode), true) ok++;
+                    }
+                    std::cout << "\nDone! " << ok << " saves extracted."
+                              << std::endl;
                 } else {
-                    if (extractSave(drivePath, save,
-                                    getDefaultOutputDir())) success++;
+                    try {
+                        int idx = std::stoi(c) - 1;
+                        if (idx >= 0 && idx < (int)saves.size()) {
+                            doExtractSave(drivePath, saves[idx], xeniaMode);
+                        } else {
+                            std::cout << "Enter 1-" << saves.size()
+                                      << std::endl;
+                        }
+                    } catch (...) {
+                        std::cout << "Invalid input." << std::endl;
+                    }
                 }
             }
-            std::cout << "\nDone! " << success << "/"
-                      << saves.size() << " saves extracted." << std::endl;
-            break;
 
-        } else {
-            try {
-                int idx = std::stoi(choice) - 1;
-                if (idx >= 0 && idx < (int)saves.size()) {
-                    doExtract(drivePath, saves[idx], xeniaMode);
-                } else {
-                    std::cout << "Enter a number between 1 and "
-                              << saves.size() << std::endl;
+        // ── GAME SCAN ──────────────────────────────────────────
+        } else if (choice == "2") {
+
+            std::cout << "\nScanning Xbox 360 filesystem for installed games..."
+                      << std::endl;
+
+            std::vector<XTAFGame> games =
+                scanXTAFForGames(drivePath, XBOX360_PARTITION);
+
+            printGameTable(games);
+
+            if (games.empty()) continue;
+
+            std::cout << "\nEnter number to extract game, or 'b' to go back: ";
+
+            while (true) {
+                std::string c;
+                std::cin >> c;
+
+                if (c == "b" || c == "B") break;
+
+                try {
+                    int idx = std::stoi(c) - 1;
+                    if (idx >= 0 && idx < (int)games.size()) {
+                        const auto& game = games[idx];
+
+#ifdef _WIN32
+                        std::string sep = "\\";
+#else
+                        std::string sep = "/";
+#endif
+                        // output dir: SaveHarbor_Saves/Games/TitleID/
+                        std::string outDir = getDefaultOutputDir() +
+                                             sep + "Games" +
+                                             sep + game.titleId;
+
+                        extractGameFiles(drivePath, game, outDir);
+
+                        std::cout << "\nTo play in Xenia:" << std::endl;
+                        std::cout << "  File → Open → navigate to: "
+                                  << outDir << sep << "default.xex"
+                                  << std::endl;
+                    } else {
+                        std::cout << "Enter 1-" << games.size() << std::endl;
+                    }
+                } catch (...) {
+                    std::cout << "Invalid input." << std::endl;
                 }
-            } catch (...) {
-                std::cout << "Invalid input. Enter a number, "
-                             "'all', 'm', or 'q'" << std::endl;
+
+                std::cout << "Choice: ";
             }
         }
     }

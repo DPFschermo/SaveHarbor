@@ -2,19 +2,28 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-
-struct XTAFHeader {
-  char      magic[4];
-  uint32_t  id;
-  uint32_t  sectorsPerCluster;
-  uint32_t  rootDirFirstCluster;
-};
+#include <functional>
 
 struct XTAFEntry {
-  std::string name;
-  uint32_t    size;
-  bool        isDirectory;
-  uint64_t    offset;
+    std::string name;
+    uint32_t    cluster;
+    uint32_t    size;
+    bool        isDirectory;
 };
 
-std::vector<XTAFEntry> scanXTAFPartition(const std::string& drivePath, uint64_t partitionOffset);
+struct XTAFGame {
+    std::string titleId;
+    std::string name;
+    std::string xexPath;
+    uint64_t    xexOffset;
+    uint64_t    xexSize;
+    bool        isGOD;
+};
+
+// main XTAF scanner — finds all installed games
+std::vector<XTAFGame> scanXTAFForGames(const std::string& drivePath,
+                                        uint64_t partitionOffset);
+
+bool extractGameFiles(const std::string& drivePath,
+                      const XTAFGame& game,
+                      const std::string& outputDir);
