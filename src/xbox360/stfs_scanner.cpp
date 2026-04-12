@@ -118,8 +118,6 @@ static std::string bytesToString(const uint8_t* buf, size_t maxBytes) {
 
 // =====================================================================
 // STFS VALIDATION
-// Based on actual header analysis of real saves from your drive.
-// We keep this lean — only checks that we KNOW are correct.
 // =====================================================================
 
 static bool isValidSTFS(const uint8_t* data, size_t size) {
@@ -131,12 +129,9 @@ static bool isValidSTFS(const uint8_t* data, size_t size) {
                       (memcmp(data, "PIRS", 4) == 0);
     if (!validMagic) return false;
 
-    // title ID at 0x360 must be non-zero
     uint32_t titleId = readBE32(data, 0x360);
     if (titleId == 0) return false;
 
-    // content type at 0x344 must be a known Xbox 360 value
-    // confirmed from real save: 0x344 = 00 00 00 01 (saved game)
     uint32_t contentType = readBE32(data, 0x344);
     static const uint32_t validTypes[] = {
         0x00000001, // saved game
@@ -153,8 +148,6 @@ static bool isValidSTFS(const uint8_t* data, size_t size) {
         if (contentType == t) { validType = true; break; }
     if (!validType) return false;
 
-    // the header size field at 0x340 must be reasonable
-    // real saves have values like 0x971a (from your AC1 dump)
     uint32_t headerSize = readBE32(data, 0x340);
     if (headerSize == 0 || headerSize > 0x100000) return false;
 
@@ -210,7 +203,6 @@ public:
     }
 
     size_t read(uint8_t* buf, size_t size) {
-        // Windows physical drive reads must be 512-byte aligned
         size_t aligned = ((size + 511) / 512) * 512;
         std::vector<uint8_t> tmp(aligned, 0);
         DWORD bytesRead = 0;
@@ -254,8 +246,6 @@ public:
 
 // =====================================================================
 // DRIVE SCANNER
-// Reads large 1MB chunks sequentially (fast),
-// but only validates at 0x1000-aligned offsets (no false positives).
 // =====================================================================
 
 std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
@@ -281,12 +271,11 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
         return saves;
     }
 
-    const size_t   CHUNK    = 1024 * 1024; // 1MB sequential reads
-    const uint64_t STEP     = 0x1000;      // check every 4096 bytes
+    const size_t   CHUNK    = 1024 * 1024;
+    const uint64_t STEP     = 0x1000;
     const size_t   HDR_SIZE = 0x500;
     uint64_t       offset   = 0;
 
-    // extra HDR_SIZE bytes so headers at chunk boundary are safe
     std::vector<uint8_t> chunk(CHUNK + HDR_SIZE, 0);
 
     const uint8_t* MAGICS[] = {
@@ -311,19 +300,16 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
                   << "Found: " << saves.size()
                   << std::flush;
 
-        // one big sequential read
         if (!drive.seek(offset)) { offset += CHUNK; continue; }
         size_t bytesRead = drive.read(chunk.data(), CHUNK + HDR_SIZE);
         if (bytesRead == 0) break;
 
-        // walk through chunk at 0x1000 intervals
         for (size_t pos = 0;
              pos + HDR_SIZE <= bytesRead;
              pos += STEP) {
 
             const uint8_t* data = chunk.data() + pos;
 
-            // cheap magic check first
             bool hasMagic = false;
             for (const uint8_t* magic : MAGICS) {
                 if (memcmp(data, magic, 4) == 0) {
@@ -333,7 +319,6 @@ std::vector<STFSSave> scanDriveForSaves(const std::string& drivePath) {
             }
             if (!hasMagic) continue;
 
-            // full validation
             if (isValidSTFS(data, HDR_SIZE)) {
                 uint64_t absOffset = offset + pos;
                 bool duplicate = false;
